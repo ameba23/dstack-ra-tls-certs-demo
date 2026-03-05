@@ -1,7 +1,8 @@
 use anyhow::Result;
-use ra_tls::attestation::{Attestation, QuoteContentType, VersionedAttestation};
+use ra_tls::attestation::{Attestation, AttestationQuote, QuoteContentType, VersionedAttestation};
 use ra_tls::cert::CertRequest;
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
+use ra_tls::traits::CertExt;
 use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
@@ -53,6 +54,23 @@ fn self_signed_ra_cert() -> Result<(CertificateDer<'static>, PrivateKeyDer<'stat
     Ok((cert.der().to_vec().into(), key_der))
 }
 
+/// Extract custom attestation payload bytes from a certificate.
+fn extract_custom_attestation_from_cert(cert: &CertificateDer<'_>) -> Result<Vec<u8>> {
+    if let Ok(Some(attestation)) = ra_tls::attestation::from_der(cert.as_ref()) {
+        if let AttestationQuote::DstackTdx(tdx_quote) = attestation.quote {
+            return Ok(tdx_quote.quote);
+        }
+    }
+
+    // This is the ugly part:
+    // Fallback: custom demo data is stored in the legacy TDX quote extension and may not be a
+    // parseable Intel TDX quote, which makes `attestation::from_der` fail.
+    let (_, cert) = x509_parser::parse_x509_certificate(cert.as_ref())
+        .map_err(|e| anyhow::anyhow!("failed to parse certificate: {e}"))?;
+    cert.get_extension_bytes(ra_tls::oids::PHALA_RATLS_TDX_QUOTE)?
+        .ok_or_else(|| anyhow::anyhow!("custom attestation extension not found in certificate"))
+}
+
 /// Truncate / pad pubkey to 64 bytes (in production we would probaby hash it)
 fn to_fixed_64(v: Vec<u8>) -> [u8; 64] {
     let mut out = [0u8; 64];
@@ -69,6 +87,12 @@ fn main() -> Result<()> {
     }
 
     let (cert, key) = self_signed_ra_cert()?;
+    let custom_attestation = extract_custom_attestation_from_cert(&cert)?;
+    println!(
+        "Custom attestation payload: {}",
+        String::from_utf8_lossy(&custom_attestation)
+    );
+
     let server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert], key)?;
