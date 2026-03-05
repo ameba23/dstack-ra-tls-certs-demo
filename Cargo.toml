@@ -1,0 +1,9 @@
+[package]
+name = "ra-tls-certs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+ra-tls = { git = "https://github.com/Dstack-TEE/dstack.git", version = "0.5.7", features = ["quote"] }
+tokio-rustls = "0.26.1"
